@@ -6,143 +6,246 @@ This document describes the system architecture, data flow, and main components 
 
 ## Table of Contents
 
-- [High-Level Overview](#high-level-overview)
-- [Component Diagram](#component-diagram)
-- [Backend Components](#backend-components)
-- [Data Flow](#data-flow)
-- [API Contract](#api-contract)
-- [Frontend Architecture](#frontend-architecture)
-- [ML Pipeline](#ml-pipeline)
-- [Deployment Considerations](#deployment-considerations)
+* High-Level Overview
+* System Architecture Diagram
+* Backend Internal Components
+* Data Flow
+* API Contract
+* Frontend Architecture
+* ML Pipeline
+* Deployment Considerations
+* Summary
 
 ---
 
-## High-Level Overview
+# High-Level Overview
 
-Trade Sentry is a **three-tier** application:
+Trade Sentry is a **three-tier application**:
 
-1. **Frontend** — React SPA (Vite) for search, dashboard, charts, live price, and chatbot.
-2. **Backend** — FastAPI server that orchestrates market data, ML models, and LLM calls.
-3. **External / Optional** — Yahoo Finance (data), Groq (LLM), and optionally a separate ML service (e.g. Lambda) for trend/sentiment.
+1. **Frontend** — React SPA (Vite)
+2. **Backend** — FastAPI server (orchestrator)
+3. **External Services** — Yahoo Finance, Groq API, optional ML service
 
-The backend is the **orchestrator**: it pulls data and calls internal services (market data, AI engine, news agent, LLM engine, question agent) to produce the analysis and chat responses.
+The backend acts as the central orchestrator.
 
 ---
 
-## Component Diagram
+# System Architecture Diagram
 
+```mermaid
+flowchart LR
+
+    subgraph FRONTEND
+        A1[Navbar]
+        A2[SearchBar]
+        A3[StockChart]
+        A4[Dashboard]
+        A5[Live Price WebSocket Client]
+        A6[Chatbot UI]
+    end
+
+    subgraph BACKEND
+        B1[main.py API and WebSocket]
+        B2[marketData Service]
+        B3[ai_engine LSTM]
+        B4[news_agent FinBERT]
+        B5[llm_engine Verdict]
+        B6[question_agent Chat]
+    end
+
+    subgraph EXTERNAL
+        C1[Yahoo Finance]
+        C2[Groq API]
+        C3[Optional ML Service]
+    end
+
+    FRONTEND -->|HTTP| B1
+    FRONTEND -->|WebSocket| B1
+
+    B1 --> B2
+    B1 --> B3
+    B1 --> B4
+    B1 --> B5
+    B1 --> B6
+
+    B2 --> C1
+    B4 --> C1
+    B5 --> C2
+    B6 --> C2
+    B3 --> C3
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           FRONTEND (React + Vite)                         │
-│  Navbar │ SearchBar │ StockChart │ Dashboard (pivots, trend, sentiment)  │
-│  Live Price (WebSocket) │ Chatbot UI                                       │
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │ HTTP / WebSocket
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         BACKEND (FastAPI)                                 │
-│  main.py — Routes: /api/analyze/{ticker}, /api/chat, /ws/price/{ticker}  │
-└───┬─────────────┬─────────────┬─────────────┬─────────────┬─────────────┘
-    │             │             │             │             │
-    ▼             ▼             ▼             ▼             ▼
-┌─────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐
-│market   │ │ai_engine  │ │news_agent │ │llm_engine │ │question_agent│
-│Data     │ │(LSTM)     │ │(FinBERT) │ │(Groq)    │ │(Groq chat)   │
-│yfinance │ │TensorFlow │ │Transformers│ │Verdict   │ │Q&A           │
-└─────────┘ └───────────┘ └───────────┘ └───────────┘ └──────────────┘
-    │             │             │             │             │
-    ▼             ▼             ▼             ▼             ▼
-┌─────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌──────────────┐
-│Yahoo    │ │app/models/│ │yf.news +  │ │Groq API   │ │Groq API      │
-│Finance  │ │lstm.h5    │ │FinBERT    │ │           │ │              │
-│         │ │scaler.gz  │ │           │ │           │ │              │
-└─────────┘ └───────────┘ └───────────┘ └───────────┘ └──────────────┘
+
+---
+
+# Backend Processing Flow
+
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant M as main.py
+    participant MD as marketData
+    participant AI as ai_engine
+    participant NA as news_agent
+    participant LLM as llm_engine
+
+    F->>M: GET /api/analyze/{ticker}
+    M->>MD: get_pivot_points
+    M->>MD: get_stock_data
+    M->>AI: predict_trend
+    M->>NA: get_news_sentiment
+    M->>LLM: get_ai_verdict
+    LLM-->>M: verdict
+    M-->>F: Full Analysis JSON
 ```
 
 ---
 
-## Backend Components
+# Chat Flow
 
-### 1. `main.py` (FastAPI application)
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant M as main.py
+    participant QA as question_agent
+    participant G as Groq API
 
-- **Role:** Entry point, CORS, route definitions, WebSocket handler.
-- **Endpoints:**
-  - `GET /` — Health check.
-  - `GET /api/analyze/{ticker}` — Full analysis pipeline (lazy imports of services).
-  - `POST /api/chat` — Chatbot; body: `ticker`, `question`, `context_data`.
-  - `WS /ws/price/{ticker}` — Live price stream (polling yfinance every 2s, sending JSON).
-
-### 2. `services/marketData.py`
-
-- **Role:** Market data and technical structure.
-- **Functions:**
-  - `validate_indian_ticker(ticker)` — Normalizes NSE/BSE (e.g. adds `.NS`).
-  - `get_stock_data(ticker, period, interval)` — OHLCV DataFrame via yfinance.
-  - `get_pivot_points(ticker)` — Pivot point, support/resistance, current price.
-  - `get_full_chart_data(ticker)` — Multi-timeframe series (1D, 5D, 1M, 1Y) for charts.
-- **Data source:** Yahoo Finance (yfinance).
-
-### 3. `services/ai_engine.py`
-
-- **Role:** Short-term trend prediction.
-- **Model:** LSTM (TensorFlow/Keras), loaded from `app/models/lstm_model.h5`.
-- **Input:** Last ~60–100 closing prices.
-- **Processing:** MinMax scaling (using `app/models/scaler.gz`), optional RSI-like features, LSTM inference.
-- **Output:** `{ "signal": "BULLISH"|"BEARISH"|"NEUTRAL", "confidence": float }`.
-
-### 4. `services/news_agent.py`
-
-- **Role:** News sentiment for the ticker.
-- **Model:** FinBERT (`ProsusAI/finbert`) via Hugging Face Transformers.
-- **Input:** Headlines from `yf.Ticker(ticker).news` (top N).
-- **Output:** Aggregate sentiment label (e.g. Positive / Negative / Neutral or a short summary string).
-
-### 5. `services/llm_engine.py`
-
-- **Role:** Final trading verdict from all signals.
-- **LLM:** Groq (e.g. `openai/gpt-oss-20b`) via LangChain.
-- **Input:** Ticker, current price, pivot data, trend signal, sentiment.
-- **Output:** Structured verdict (e.g. STRONG BUY | BUY | WAIT/HOLD | SELL | STRONG SELL) and short explanation.
-
-### 6. `services/question_agent.py`
-
-- **Role:** Context-aware Q&A chatbot.
-- **LLM:** Same Groq client.
-- **Input:** Ticker, user question, and `context_data` (current analysis: price, pivots, trend, sentiment).
-- **Output:** Natural-language answer grounded in the provided context.
+    F->>M: POST /api/chat
+    M->>QA: get_chat_response
+    QA->>G: LLM request
+    G-->>QA: answer
+    QA-->>M: formatted answer
+    M-->>F: JSON response
+```
 
 ---
 
-## Data Flow
+# Backend Components
 
-### Full analysis (`GET /api/analyze/{ticker}`)
+## main.py
 
-1. **Pivot & structure** — `marketData.get_pivot_points(ticker)`; on failure return error.
-2. **Historical series** — `marketData.get_stock_data(ticker, "1y")` and/or `get_full_chart_data(ticker)` for last 100 closes.
-3. **Trend** — `ai_engine.predict_trend(closes)` → `{ signal, confidence }`.
-4. **Sentiment** — `news_agent.get_news_sentiment(symbol)`.
-5. **Verdict** — `llm_engine.get_ai_verdict(ticker, price, pivots, trend, sentiment)`.
-6. **Response** — JSON: `symbol`, `price`, `trend_signal`, `sentiment_signal`, `support_resistance`, `ai_analysis`, `chart_data`.
+Role:
 
-### Chat (`POST /api/chat`)
+* Entry point
+* CORS
+* Routes
+* WebSocket handler
 
-1. Body: `ticker`, `question`, `context_data` (same structure as analysis response).
-2. `question_agent.get_chat_response(ticker, question, context_data)`.
-3. Response: `{ "answer": "..." }`.
+Endpoints:
 
-### Live price (`WS /ws/price/{ticker}`)
-
-1. Client connects to `/ws/price/{ticker}`.
-2. Server loop: `get_pivot_points(ticker)` → send `{ price, symbol }` → sleep 2s.
-3. Continues until disconnect or error.
+* GET /
+* GET /api/analyze/{ticker}
+* POST /api/chat
+* WS /ws/price/{ticker}
 
 ---
 
-## API Contract
+## marketData Service
 
-### `GET /api/analyze/{ticker}`
+Functions:
 
-**Response (success):**
+* validate_indian_ticker
+* get_stock_data
+* get_pivot_points
+* get_full_chart_data
+
+Source:
+
+* Yahoo Finance via yfinance
+
+---
+
+## ai_engine
+
+Model:
+
+* LSTM (TensorFlow / Keras)
+
+Files:
+
+* app/models/lstm_model.h5
+* app/models/scaler.gz
+
+Input:
+
+* Last 60 to 100 closes
+
+Output:
+
+```json
+{
+  "signal": "BULLISH",
+  "confidence": 72.5
+}
+```
+
+---
+
+## news_agent
+
+Model:
+
+* FinBERT (ProsusAI/finbert)
+
+Input:
+
+* Top headlines from yfinance
+
+Output:
+
+* Aggregate sentiment label
+
+---
+
+## llm_engine
+
+LLM:
+
+* Groq (openai/gpt-oss-20b via LangChain)
+
+Input:
+
+* Ticker
+* Price
+* Pivots
+* Trend
+* Sentiment
+
+Output:
+
+```json
+{
+  "verdict": "BUY",
+  "explanation": "Short explanation"
+}
+```
+
+---
+
+## question_agent
+
+Context-aware chatbot using Groq.
+
+Input:
+
+* Ticker
+* Question
+* context_data (full analysis response)
+
+Output:
+
+```json
+{
+  "answer": "Natural language response grounded in context"
+}
+```
+
+---
+
+# API Contract
+
+## GET /api/analyze/{ticker}
+
+Success:
 
 ```json
 {
@@ -156,66 +259,138 @@ The backend is the **orchestrator**: it pulls data and calls internal services (
     "support": { "stop_1": 2400, "stop_2": 2360 }
   },
   "ai_analysis": { "verdict": "BUY", "explanation": "..." },
-  "chart_data": { "1D": [...], "5D": [...], "1M": [...], "1Y": [...] }
+  "chart_data": {
+    "1D": [],
+    "5D": [],
+    "1M": [],
+    "1Y": []
+  }
 }
 ```
 
-**Response (error):** `{ "error": "Invalid Ticker or Data Unavailable" }`
+Error:
 
-### `POST /api/chat`
+```json
+{
+  "error": "Invalid Ticker or Data Unavailable"
+}
+```
 
-**Request:**
+---
+
+## POST /api/chat
+
+Request:
 
 ```json
 {
   "ticker": "RELIANCE.NS",
   "question": "What is my stop loss?",
-  "context_data": { /* full analysis object */ }
+  "context_data": {}
 }
 ```
 
-**Response:** `{ "answer": "Based on current analysis, your stop loss is at 2400." }`
+Response:
 
-### WebSocket `/ws/price/{ticker}`
-
-**Messages (server → client):** `{ "price": 2450.50, "symbol": "RELIANCE.NS" }`
-
----
-
-## Frontend Architecture
-
-- **App.jsx** — State: `data` (analysis), `loading`, `chatHistory`, `livePrice`. Handles search → `analyzeStock()`, WebSocket subscription for `data.symbol`, and chat submit → `askChatbot()`.
-- **api.js** — `analyzeStock(ticker)`, `askChatbot(ticker, question, contextData)`; base URL configurable (e.g. `VITE_API_URL`).
-- **Components** — Navbar, SearchBar (ticker input), StockChart (multi-timeframe from `chart_data`). Dashboard sections show pivots, trend, sentiment, AI verdict, and chat UI.
+```json
+{
+  "answer": "Based on current analysis, your stop loss is at 2400."
+}
+```
 
 ---
 
-## ML Pipeline
+# Live Price WebSocket
 
-- **Training:** Use `Backend/app/services/train_model.ipynb` (or equivalent) to produce `lstm_model.h5` and `scaler.gz` from historical OHLCV (e.g. closes + optional features like returns/RSI).
-- **Inference:** `ai_engine.py` loads model and scaler at startup; `predict_trend(historical_prices)` expects a list of floats (length ≥ lookback, e.g. 60).
-- **Optional ml-service:** `ml-service/app.py` is a standalone entry (e.g. for AWS Lambda) that can run `predict_trend` and a sentiment step on `closes` / `headlines`; the main backend does not depend on it.
+Endpoint:
+
+```
+/ws/price/{ticker}
+```
+
+Server message:
+
+```json
+{
+  "price": 2450.50,
+  "symbol": "RELIANCE.NS"
+}
+```
+
+Updates every 2 seconds until disconnect.
 
 ---
 
-## Deployment Considerations
+# ML Pipeline
 
-- **Backend:** Run with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Ensure `GROQ_API_KEY` and model paths (`app/models/`) are available. First request loads LSTM and FinBERT (cold start).
-- **Frontend:** Set `VITE_API_URL` to the backend URL and run `npm run build`; serve `dist/` via any static host (e.g. Vercel, Netlify, nginx).
-- **CORS:** Backend allows all origins (`allow_origins=["*"]`); tighten for production.
-- **WebSocket:** Live price URL must match backend (e.g. `wss://api.example.com/ws/price/...` in production).
+Training notebook:
+
+```
+Backend/app/services/train_model.ipynb
+```
+
+Outputs:
+
+* lstm_model.h5
+* scaler.gz
+
+Inference:
+
+* Loaded at startup
+* predict_trend expects >= 60 data points
+
+Optional:
+
+* ml-service/app.py for Lambda deployment
 
 ---
 
-## Summary
+# Deployment
 
-| Concern           | Implementation |
-|------------------|----------------|
-| Market data      | yfinance, pivot math in `marketData.py` |
-| Trend            | LSTM in `ai_engine.py`, models in `app/models/` |
-| Sentiment        | FinBERT in `news_agent.py` |
-| Verdict & Chat   | Groq via LangChain in `llm_engine.py`, `question_agent.py` |
-| API              | FastAPI REST + WebSocket in `main.py` |
-| UI               | React + Vite, Tailwind, charts, WebSocket client |
+Backend:
 
-For license and contribution details, see [README.md](README.md) and [LICENSE](LICENSE).
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+Frontend:
+
+```bash
+npm run build
+```
+
+Environment:
+
+```
+VITE_API_URL=https://api.yourdomain.com
+GROQ_API_KEY=your_key
+```
+
+CORS:
+
+```
+allow_origins=["*"]
+```
+
+Restrict in production.
+
+WebSocket production example:
+
+```
+wss://api.example.com/ws/price/RELIANCE.NS
+```
+
+---
+
+# Summary
+
+| Concern     | Implementation      |
+| ----------- | ------------------- |
+| Market data | yfinance            |
+| Trend       | LSTM in ai_engine   |
+| Sentiment   | FinBERT             |
+| Verdict     | Groq LLM            |
+| API         | FastAPI + WebSocket |
+| UI          | React + Vite        |
+
+---
