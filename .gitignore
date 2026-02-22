@@ -1,0 +1,140 @@
+# ===============================
+# Trade Sentry — Comprehensive .gitignore
+# ===============================
+
+# --- OS & Editor ---
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.cover
+*.py,cover
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+ENV/
+.envrc
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.pem
+secrets/
+*.key
+
+# --- ML / Model Artifacts ---
+*.h5
+*.keras
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.gz
+*.pt
+*.pth
+*.onnx
+*.pb
+*.savedmodel
+Backend/app/models/*
+!Backend/app/models/.gitkeep
+ml-service/*.h5
+ml-service/*.gz
+ml-service/*.pkl
+
+# --- Data & Cache ---
+yfinance.cache/
+*.csv
+*.parquet
+data/
+cache/
+.cache/
+
+# --- Jupyter / Notebooks (optional: keep .ipynb, ignore checkpoints) ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# --- Node / Frontend ---
+node_modules/
+Frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm
+.yarn-integrity
+dist/
+dist-ssr/
+*.local
+.parcel-cache/
+.next/
+.nuxt/
+.vite/
+
+# --- Logs & Debug ---
+logs/
+*.log
+npm-debug.log*
+debug.log
+
+# --- Build & Deploy ---
+*.tar.gz
+*.zip
+.vercel
+.netlify
+
+# --- Misc ---
+*.bak
+*.tmp
+*.temp
+tmp/
+temp/
+frontend/
